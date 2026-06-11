@@ -22,44 +22,59 @@
 <div class="container">
     <h1>あの頃の自作TCG<br>ニゴイチ風ゲーム</h1>
 
+    <!-- 1. メニュースクリーン -->
     <div id="menu-screen">
         <input type="text" id="player-name" placeholder="プレイヤー名を入力">
         <input type="text" id="room-id-input" placeholder="ルームID (作る or 入る)">
         <button id="join-btn">ルームに入室 / 作成</button>
     </div>
 
+    <!-- 2. ロビースクリーン -->
     <div id="lobby-screen" class="hidden">
         <h2>ルーム: <span id="display-room-id"></span></h2>
         <p>参加者:</p>
         <ul id="players-list" class="player-list"></ul>
         
         <div id="host-controls" class="hidden">
-            <select id="game-mode">
-                <option value="1">モード1: お題【カード名】 ➔ 【自由な言葉】を答える</option>
-                <option value="2">モード2: お題【ランダムワード】 ➔ 【カード名】を答える</option>
-                <option value="3">モード3: お題【カード名】 ➔ 【カード名】を答える</option>
-            </select>
             <button id="start-btn">ゲームスタート！</button>
         </div>
         <p id="waiting-msg">ホストがゲームを開始するのを待っています...</p>
     </div>
 
+    <!-- 3. ゲーム画面（回答フェーズ） -->
     <div id="game-screen" class="hidden">
-        <h2>お題: <span id="current-prompt" style="color:#d35400; font-weight:bold;"></span></h2>
-        <p id="mode-instruction"></p>
+        <h2>公開されたお題リスト (<span id="prompt-count"></span>個)</h2>
+        <div id="public-prompts" style="display:flex; flex-wrap:wrap; gap:10px; justify-content:center; margin-bottom:20px;"></div>
         
-        <input type="text" id="answer-input" placeholder="回答を入力" list="card-list">
-        <datalist id="card-list"></datalist> <button id="submit-btn">回答を送信</button>
-        <p id="submit-status"></p>
-        
-        <div id="reveal-controls" class="hidden">
-            <button id="reveal-btn" style="background-color: #28a745;">全員の回答をオープン！</button>
+        <div style="background:#e8f4fd; padding:15px; border-radius:8px; margin-bottom:20px; border: 1px solid #b8daff;">
+            <h3 style="margin-top:0;">あなたに割り当てられた2つのお題</h3>
+            <div id="my-prompts" style="font-size:1.4em; font-weight:bold; color:#0056b3; letter-spacing: 2px;"></div>
         </div>
+
+        <input type="text" id="answer-input" placeholder="2つの共通項となるワードを入力">
+        <button id="submit-btn">回答を送信</button>
+        <p id="submit-status" style="font-weight:bold; color:#28a745;"></p>
     </div>
 
+    <!-- 4. 投票画面（投票フェーズ） -->
+    <div id="vote-screen" class="hidden">
+        <h2>みんなの回答一覧</h2>
+        <div id="other-answers-container" style="text-align:left; margin-bottom:25px; background:#fff; padding:15px; border-radius:8px; border:1px solid #ddd;"></div>
+
+        <h2>余りお題を予想して投票</h2>
+        <p style="font-size:0.9em; color:#666;">誰にも割り当てられていないお題（余り）を1つ選んでください。<br>(※自分が割り当てられた2つのお題は選択できません)</p>
+        <div id="vote-options-container" style="display:flex; flex-wrap:wrap; gap:10px; justify-content:center; margin-bottom:20px;"></div>
+        <button id="vote-submit-btn">投票を送信</button>
+        <p id="vote-status" style="font-weight:bold; color:#28a745;"></p>
+    </div>
+
+    <!-- 5. 結果画面 -->
     <div id="result-screen" class="hidden">
         <h2>結果発表</h2>
-        <h3>お題: <span id="result-prompt"></span></h3>
+        <div style="background:#d4edda; color:#155724; padding:15px; margin:15px 0; border-radius:8px; border:1px solid #c3e6cb;">
+            <h3 style="margin:0;">正解（誰にも配られなかったお題）</h3>
+            <p id="result-spare-prompt" style="font-size:1.8em; font-weight:bold; margin:10px 0 0 0;"></p>
+        </div>
         <div id="results-container"></div>
         <button id="next-round-btn" class="hidden">次のラウンドへ (ロビーに戻る)</button>
     </div>
@@ -91,9 +106,6 @@
     let currentRoom = "";
     let isHost = false;
 
-    // モード2用ランダムワードリスト（適宜追加してください）
-    const randomWords = ["強い", "弱い", "赤い", "青い", "自然", "機械", "魔法", "怖い", "かわいい", "速い", "遅い", "重い", "軽い", "光", "闇"];
-
     // カードリストの取得
     async function loadCardNames() {
         try {
@@ -101,14 +113,6 @@
             const response = await fetch("https://raw.githubusercontent.com/Omezi42/AnokoroImageFolder/main/all_card_names.txt");
             const text = await response.text();
             cardNames = text.split('\n').map(name => name.trim()).filter(name => name.length > 0);
-            
-            // サジェスト用のdatalistを構築（モード2,3で入力しやすくするため）
-            const datalist = document.getElementById('card-list');
-            cardNames.forEach(name => {
-                const option = document.createElement('option');
-                option.value = name;
-                datalist.appendChild(option);
-            });
             console.log(`${cardNames.length}枚のカードデータを読み込みました`);
         } catch (error) {
             console.error("カードリストの取得に失敗しました", error);
@@ -118,15 +122,20 @@
 
     // UI切り替え関数
     function showScreen(screenId) {
-        ['menu-screen', 'lobby-screen', 'game-screen', 'result-screen'].forEach(id => {
+        ['menu-screen', 'lobby-screen', 'game-screen', 'vote-screen', 'result-screen'].forEach(id => {
             document.getElementById(id).classList.add('hidden');
         });
         document.getElementById(screenId).classList.remove('hidden');
     }
 
-    // ランダムな要素を取得する関数
-    function getRandomElement(arr) {
-        return arr[Math.floor(Math.random() * arr.length)];
+    // 配列をシャッフルする関数
+    function shuffleArray(array) {
+        const arr = [...array];
+        for (let i = arr.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [arr[i], arr[j]] = [arr[j], arr[i]];
+        }
+        return arr;
     }
 
     // 入室処理
@@ -144,11 +153,19 @@
             await set(roomRef, {
                 status: 'lobby',
                 hostId: myId,
-                players: { [myId]: { name: myName, answer: "" } }
+                players: { [myId]: { name: myName, answer: "", vote: "", score: 0, roundScore: 0 } }
             });
         } else {
             // 既存の部屋に参加
-            await update(ref(db, `rooms/${currentRoom}/players/${myId}`), { name: myName, answer: "" });
+            const existingPlayerData = snapshot.val().players?.[myId];
+            const currentScore = existingPlayerData ? (existingPlayerData.score || 0) : 0;
+            await update(ref(db, `rooms/${currentRoom}/players/${myId}`), { 
+                name: myName, 
+                answer: "", 
+                vote: "", 
+                roundScore: 0,
+                score: currentScore 
+            });
         }
 
         document.getElementById('display-room-id').innerText = currentRoom;
@@ -156,7 +173,6 @@
             document.getElementById('host-controls').classList.remove('hidden');
             document.getElementById('waiting-msg').classList.add('hidden');
             document.getElementById('next-round-btn').classList.remove('hidden');
-            document.getElementById('reveal-controls').classList.remove('hidden');
         }
 
         // 部屋の変更を監視
@@ -167,7 +183,7 @@
                 location.reload();
                 return;
             }
-            updateLobby(data.players);
+            updateLobby(data.players, data.status);
             handleGameState(data);
         });
 
@@ -180,70 +196,257 @@
     });
 
     // ロビーのプレイヤーリスト更新
-    function updateLobby(players) {
+    function updateLobby(players, status) {
         const list = document.getElementById('players-list');
         list.innerHTML = "";
         for (const uid in players) {
             const li = document.createElement('li');
-            li.innerText = players[uid].name + (players[uid].answer ? " (回答済み)" : "");
+            let statusText = "";
+            if (status === 'answering') {
+                statusText = players[uid].answer ? " (回答済み)" : " (回答中...)";
+            } else if (status === 'voting') {
+                statusText = players[uid].vote ? " (投票済み)" : " (投票中...)";
+            }
+            li.innerText = `${players[uid].name} [スコア: ${players[uid].score || 0}]${statusText}`;
             list.appendChild(li);
         }
     }
 
     // ゲーム状態のハンドリング
     function handleGameState(data) {
-        if (data.status === 'playing') {
-            document.getElementById('current-prompt').innerText = data.prompt;
-            
-            let instruction = "";
-            if (data.mode == "1") instruction = "このカードから連想される【自由な言葉】を入力してください。";
-            if (data.mode == "2") instruction = "この言葉から連想される【カード名】を入力してください。";
-            if (data.mode == "3") instruction = "このカードから連想される【別のカード名】を入力してください。";
-            document.getElementById('mode-instruction').innerText = instruction;
+        const players = data.players || {};
+        const myData = players[myId];
 
-            document.getElementById('answer-input').value = "";
-            document.getElementById('submit-status').innerText = "";
+        if (data.status === 'answering') {
+            // 場に公開されたお題リストの表示
+            const countSpan = document.getElementById('prompt-count');
+            const publicContainer = document.getElementById('public-prompts');
+            publicContainer.innerHTML = "";
+            
+            if (data.prompts) {
+                countSpan.innerText = data.prompts.length;
+                data.prompts.forEach(p => {
+                    const span = document.createElement('span');
+                    span.innerText = p;
+                    span.style.cssText = "background:#f8f9fa; border:1px solid #dee2e6; padding:8px 15px; border-radius:20px; font-weight:bold; font-size:0.95em;";
+                    publicContainer.appendChild(span);
+                });
+            }
+
+            // 自分のお題を表示
+            const myPromptsDiv = document.getElementById('my-prompts');
+            if (myData && myData.assignedPrompts) {
+                myPromptsDiv.innerText = myData.assignedPrompts.join("  /  ");
+            } else {
+                myPromptsDiv.innerText = "割り当て中...";
+            }
+
+            // 入力フォームの制御
+            if (myData && myData.answer) {
+                document.getElementById('answer-input').disabled = true;
+                document.getElementById('submit-btn').disabled = true;
+                document.getElementById('submit-status').innerText = `送信完了！: "${myData.answer}" (他のプレイヤーを待っています...)`;
+            } else {
+                document.getElementById('answer-input').disabled = false;
+                document.getElementById('answer-input').value = "";
+                document.getElementById('submit-btn').disabled = false;
+                document.getElementById('submit-status').innerText = "";
+            }
+
             showScreen('game-screen');
+
+            // ホストの場合のみ、全員が回答したかチェックして次のフェーズへ移行
+            if (isHost) {
+                const allAnswered = Object.keys(players).every(uid => players[uid].answer && players[uid].answer.trim() !== "");
+                if (allAnswered) {
+                    update(ref(db, `rooms/${currentRoom}`), { status: 'voting' });
+                }
+            }
+
+        } else if (data.status === 'voting') {
+            // 他のプレイヤーの回答一覧を表示
+            const answersContainer = document.getElementById('other-answers-container');
+            answersContainer.innerHTML = "";
+            
+            for (const uid in players) {
+                if (uid === myId) continue;
+                const div = document.createElement('div');
+                div.style.cssText = "padding:10px; border-bottom:1px solid #eee; font-size:1.1em;";
+                div.innerHTML = `<strong>${players[uid].name}の共通ワード:</strong> <span style="color:#d35400; font-weight:bold;">${players[uid].answer || "（未回答）"}</span>`;
+                answersContainer.appendChild(div);
+            }
+
+            // 投票選択肢（お題リスト）を表示。自分のお題2つは非活性に
+            const voteContainer = document.getElementById('vote-options-container');
+            voteContainer.innerHTML = "";
+
+            if (data.prompts) {
+                data.prompts.forEach(p => {
+                    const label = document.createElement('label');
+                    label.style.cssText = "display:inline-block; margin:5px; background:#f8f9fa; border:1px solid #dee2e6; padding:10px 15px; border-radius:8px; cursor:pointer; font-weight:bold;";
+                    
+                    const radio = document.createElement('input');
+                    radio.type = "radio";
+                    radio.name = "vote-prompt";
+                    radio.value = p;
+                    radio.style.marginRight = "8px";
+
+                    const isMyPrompt = myData && myData.assignedPrompts && myData.assignedPrompts.includes(p);
+                    if (isMyPrompt) {
+                        radio.disabled = true;
+                        label.style.opacity = "0.5";
+                        label.style.cursor = "not-allowed";
+                        label.style.background = "#e9ecef";
+                        label.title = "自分の割り当てお題は選べません";
+                    }
+
+                    label.appendChild(radio);
+                    label.appendChild(document.createTextNode(p));
+                    voteContainer.appendChild(label);
+                });
+            }
+
+            // 投票送信状態の制御
+            if (myData && myData.vote) {
+                document.getElementById('vote-submit-btn').disabled = true;
+                document.getElementById('vote-status').innerText = `投票完了！: "${myData.vote}" (他のプレイヤーを待っています...)`;
+            } else {
+                document.getElementById('vote-submit-btn').disabled = false;
+                document.getElementById('vote-status').innerText = "";
+            }
+
+            showScreen('vote-screen');
+
+            // ホストの場合のみ、全員が投票したかチェックしてスコア計算と結果フェーズ移行
+            if (isHost) {
+                const allVoted = Object.keys(players).every(uid => players[uid].vote && players[uid].vote.trim() !== "");
+                if (allVoted) {
+                    const updates = {};
+                    const spare = data.sparePrompt;
+
+                    for (const uid in players) {
+                        const p = players[uid];
+                        let roundScore = 0;
+
+                        // 余りお題を当てたか (+20pt)
+                        if (p.vote === spare) {
+                            roundScore += 20;
+                        }
+
+                        // 自分の割り当てられたお題が他人に投票されたか (1人につき-10pt)
+                        let votedCount = 0;
+                        for (const otherUid in players) {
+                            if (otherUid === uid) continue;
+                            const other = players[otherUid];
+                            if (p.assignedPrompts && p.assignedPrompts.includes(other.vote)) {
+                                votedCount++;
+                            }
+                        }
+                        roundScore += votedCount * -10;
+
+                        const newScore = (p.score || 0) + roundScore;
+                        updates[`players/${uid}/roundScore`] = roundScore;
+                        updates[`players/${uid}/score`] = newScore;
+                    }
+                    updates['status'] = 'revealed';
+                    update(ref(db, `rooms/${currentRoom}`), updates);
+                }
+            }
+
         } else if (data.status === 'revealed') {
-            document.getElementById('result-prompt').innerText = data.prompt;
+            // 正解の表示
+            document.getElementById('result-spare-prompt').innerText = data.sparePrompt || "エラー";
+
+            // 各プレイヤーの結果を表示
             const container = document.getElementById('results-container');
             container.innerHTML = "";
-            
-            for (const uid in data.players) {
-                const player = data.players[uid];
+
+            for (const uid in players) {
+                const player = players[uid];
                 const div = document.createElement('div');
                 div.className = 'result-card';
-                div.innerHTML = `<strong>${player.name}</strong>: <span style="font-size: 1.2em;">${player.answer || "無回答"}</span>`;
+                
+                // 誰に投票されたかを調べる
+                const votedBy = [];
+                for (const otherUid in players) {
+                    if (otherUid === uid) continue;
+                    const other = players[otherUid];
+                    if (player.assignedPrompts && player.assignedPrompts.includes(other.vote)) {
+                        votedBy.push(other.name);
+                    }
+                }
+
+                const votedByText = votedBy.length > 0 
+                    ? `<span style="color:#dc3545; font-weight:bold;">${votedBy.join(', ')} から見破られました (-${votedBy.length * 10}pt)</span>`
+                    : `<span style="color:#28a745; font-weight:bold;">誰にも見破られませんでした！</span>`;
+
+                const voteCorrectText = player.vote === data.sparePrompt
+                    ? `<span style="color:#28a745; font-weight:bold;">余りお題を見事正解！ (+20pt)</span>`
+                    : `<span style="color:#6c757d;">不正解（投票先: "${player.vote || "無投票"}"）</span>`;
+
+                div.innerHTML = `
+                    <div style="display:flex; justify-content:space-between; border-bottom:1px dashed #ccc; padding-bottom:5px; margin-bottom:10px;">
+                        <strong>${player.name} ${uid === myId ? '(あなた)' : ''}</strong>
+                        <span style="font-weight:bold; font-size:1.1em; color:#007bff;">今回: ${player.roundScore >= 0 ? '+' : ''}${player.roundScore} pt (累計: ${player.score} pt)</span>
+                    </div>
+                    <div style="font-size:0.95em; line-height:1.6;">
+                        <strong>お題:</strong> ${player.assignedPrompts ? player.assignedPrompts.join(', ') : 'なし'}<br>
+                        <strong>共通ワード:</strong> <span style="color:#d35400; font-weight:bold;">"${player.answer || ''}"</span><br>
+                        <strong>結果:</strong> ${voteCorrectText} / ${votedByText}
+                    </div>
+                `;
                 container.appendChild(div);
             }
+
             showScreen('result-screen');
+
         } else if (data.status === 'lobby') {
-            // ロビーに戻った時の初期化
-            update(ref(db, `rooms/${currentRoom}/players/${myId}`), { answer: "" });
+            // ロビー画面の表示
             showScreen('lobby-screen');
         }
     }
 
     // ゲーム開始 (ホストのみ)
-    document.getElementById('start-btn').addEventListener('click', () => {
-        const mode = document.getElementById('game-mode').value;
-        let promptText = "";
+    document.getElementById('start-btn').addEventListener('click', async () => {
+        const roomRef = ref(db, `rooms/${currentRoom}`);
+        const snapshot = await get(roomRef);
+        const data = snapshot.val();
+        if (!data || !data.players) return;
 
-        if (mode == "1" || mode == "3") {
-            promptText = getRandomElement(cardNames);
-        } else if (mode == "2") {
-            promptText = getRandomElement(randomWords);
+        const playerIds = Object.keys(data.players);
+        const N = playerIds.length;
+        const requiredCardsCount = N * 2 + 1;
+
+        if (cardNames.length < requiredCardsCount) {
+            return alert("カードプールが足りません。");
         }
 
-        // 全員の回答をリセットして開始
-        get(ref(db, `rooms/${currentRoom}/players`)).then(snap => {
-            const updates = {};
-            snap.forEach(child => { updates[`players/${child.key}/answer`] = ""; });
-            updates['status'] = 'playing';
-            updates['mode'] = mode;
-            updates['prompt'] = promptText;
-            update(ref(db, `rooms/${currentRoom}`), updates);
-        });
+        // 2N + 1 枚のカードをランダムに選定
+        const shuffledPool = shuffleArray(cardNames);
+        const selectedPrompts = shuffledPool.slice(0, requiredCardsCount);
+
+        // プレイヤーに2枚ずつ配布するために選定したリストをさらにシャッフル
+        const promptsToDistribute = [...selectedPrompts];
+        const sparePrompt = promptsToDistribute.pop(); // 最後の1枚を余りお題（正解）とする
+
+        // 残りの 2N 枚を各プレイヤーに2枚ずつ配布
+        const updates = {};
+        for (let i = 0; i < N; i++) {
+            const uid = playerIds[i];
+            const p1 = promptsToDistribute[i * 2];
+            const p2 = promptsToDistribute[i * 2 + 1];
+            
+            updates[`players/${uid}/assignedPrompts`] = [p1, p2];
+            updates[`players/${uid}/answer`] = "";
+            updates[`players/${uid}/vote`] = "";
+            updates[`players/${uid}/roundScore`] = 0;
+        }
+
+        updates['status'] = 'answering';
+        updates['prompts'] = selectedPrompts;
+        updates['sparePrompt'] = sparePrompt;
+
+        await update(roomRef, updates);
     });
 
     // 回答送信
@@ -255,14 +458,35 @@
         document.getElementById('submit-status').innerText = "送信完了！他のプレイヤーを待っています...";
     });
 
-    // 結果発表 (ホストのみ)
-    document.getElementById('reveal-btn').addEventListener('click', () => {
-        update(ref(db, `rooms/${currentRoom}`), { status: 'revealed' });
+    // 投票送信
+    document.getElementById('vote-submit-btn').addEventListener('click', () => {
+        const selectedRadio = document.querySelector('input[name="vote-prompt"]:checked');
+        if (!selectedRadio) return alert("余りお題を1つ選択してください");
+        
+        const voteValue = selectedRadio.value;
+        update(ref(db, `rooms/${currentRoom}/players/${myId}`), { vote: voteValue });
+        document.getElementById('vote-status').innerText = "投票完了！他のプレイヤーを待っています...";
     });
 
     // 次のラウンドへ (ホストのみ)
-    document.getElementById('next-round-btn').addEventListener('click', () => {
-        update(ref(db, `rooms/${currentRoom}`), { status: 'lobby' });
+    document.getElementById('next-round-btn').addEventListener('click', async () => {
+        const roomRef = ref(db, `rooms/${currentRoom}`);
+        const snapshot = await get(roomRef);
+        const data = snapshot.val();
+        if (!data || !data.players) return;
+
+        const updates = {};
+        for (const uid in data.players) {
+            updates[`players/${uid}/assignedPrompts`] = null;
+            updates[`players/${uid}/answer`] = "";
+            updates[`players/${uid}/vote`] = "";
+            updates[`players/${uid}/roundScore`] = 0;
+        }
+        updates['status'] = 'lobby';
+        updates['prompts'] = null;
+        updates['sparePrompt'] = null;
+
+        await update(roomRef, updates);
     });
 
     // 初期化実行
