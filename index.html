@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>あの頃の自作TCG - ニゴイチ風ゲーム</title>
+    <style>
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #f4f4f9; color: #333; text-align: center; padding: 20px; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); }
+        .hidden { display: none; }
+        input, select, button { padding: 10px; margin: 10px 0; font-size: 16px; width: 80%; box-sizing: border-box; }
+        button { background-color: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        button:hover { background-color: #0056b3; }
+        .player-list { list-style: none; padding: 0; }
+        .player-list li { background: #e9ecef; margin: 5px 0; padding: 10px; border-radius: 5px; }
+        .result-card { background: #fff3cd; padding: 15px; margin: 10px 0; border-radius: 5px; border-left: 5px solid #ffc107; text-align: left; }
+        h1, h2 { color: #2c3e50; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>あの頃の自作TCG<br>ニゴイチ風ゲーム</h1>
+
+    <div id="menu-screen">
+        <input type="text" id="player-name" placeholder="プレイヤー名を入力">
+        <input type="text" id="room-id-input" placeholder="ルームID (作る or 入る)">
+        <button id="join-btn">ルームに入室 / 作成</button>
+    </div>
+
+    <div id="lobby-screen" class="hidden">
+        <h2>ルーム: <span id="display-room-id"></span></h2>
+        <p>参加者:</p>
+        <ul id="players-list" class="player-list"></ul>
+        
+        <div id="host-controls" class="hidden">
+            <select id="game-mode">
+                <option value="1">モード1: お題【カード名】 ➔ 【自由な言葉】を答える</option>
+                <option value="2">モード2: お題【ランダムワード】 ➔ 【カード名】を答える</option>
+                <option value="3">モード3: お題【カード名】 ➔ 【カード名】を答える</option>
+            </select>
+            <button id="start-btn">ゲームスタート！</button>
+        </div>
+        <p id="waiting-msg">ホストがゲームを開始するのを待っています...</p>
+    </div>
+
+    <div id="game-screen" class="hidden">
+        <h2>お題: <span id="current-prompt" style="color:#d35400; font-weight:bold;"></span></h2>
+        <p id="mode-instruction"></p>
+        
+        <input type="text" id="answer-input" placeholder="回答を入力" list="card-list">
+        <datalist id="card-list"></datalist> <button id="submit-btn">回答を送信</button>
+        <p id="submit-status"></p>
+        
+        <div id="reveal-controls" class="hidden">
+            <button id="reveal-btn" style="background-color: #28a745;">全員の回答をオープン！</button>
+        </div>
+    </div>
+
+    <div id="result-screen" class="hidden">
+        <h2>結果発表</h2>
+        <h3>お題: <span id="result-prompt"></span></h3>
+        <div id="results-container"></div>
+        <button id="next-round-btn" class="hidden">次のラウンドへ (ロビーに戻る)</button>
+    </div>
+</div>
+
+<script type="module">
+    // Firebase SDKのインポート (Realtime Databaseを追加)
+    import { initializeApp } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-app.js";
+    import { getDatabase, ref, set, onValue, update, remove, get } from "https://www.gstatic.com/firebasejs/12.14.0/firebase-database.js";
+
+    const firebaseConfig = {
+        apiKey: "AIzaSyB5buV2s4V2dhnCGeCKhkKJmD1UiaP05WA",
+        authDomain: "anokoro-3c211.firebaseapp.com",
+        projectId: "anokoro-3c211",
+        storageBucket: "anokoro-3c211.firebasestorage.app",
+        messagingSenderId: "751240749674",
+        appId: "1:751240749674:web:22cf9be0d2bfd595022013",
+        measurementId: "G-SF6NTQBLHB",
+        // Realtime DatabaseのURLが必要な場合はここに追記されますが、デフォルトで動作することが多いです
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getDatabase(app);
+
+    // 状態管理変数
+    let cardNames = [];
+    let myId = Math.random().toString(36).substring(2, 9);
+    let myName = "";
+    let currentRoom = "";
+    let isHost = false;
+
+    // モード2用ランダムワードリスト（適宜追加してください）
+    const randomWords = ["強い", "弱い", "赤い", "青い", "自然", "機械", "魔法", "怖い", "かわいい", "速い", "遅い", "重い", "軽い", "光", "闇"];
+
+    // カードリストの取得
+    async function loadCardNames() {
+        try {
+            // raw.githubusercontent.com を使用して直接テキストを取得
+            const response = await fetch("https://raw.githubusercontent.com/Omezi42/AnokoroImageFolder/main/all_card_names.txt");
+            const text = await response.text();
+            cardNames = text.split('\n').map(name => name.trim()).filter(name => name.length > 0);
+            
+            // サジェスト用のdatalistを構築（モード2,3で入力しやすくするため）
+            const datalist = document.getElementById('card-list');
+            cardNames.forEach(name => {
+                const option = document.createElement('option');
+                option.value = name;
+                datalist.appendChild(option);
+            });
+            console.log(`${cardNames.length}枚のカードデータを読み込みました`);
+        } catch (error) {
+            console.error("カードリストの取得に失敗しました", error);
+            alert("カードリストの取得に失敗しました。");
+        }
+    }
+
+    // UI切り替え関数
+    function showScreen(screenId) {
+        ['menu-screen', 'lobby-screen', 'game-screen', 'result-screen'].forEach(id => {
+            document.getElementById(id).classList.add('hidden');
+        });
+        document.getElementById(screenId).classList.remove('hidden');
+    }
+
+    // ランダムな要素を取得する関数
+    function getRandomElement(arr) {
+        return arr[Math.floor(Math.random() * arr.length)];
+    }
+
+    // 入室処理
+    document.getElementById('join-btn').addEventListener('click', async () => {
+        myName = document.getElementById('player-name').value.trim() || "名無しプレイヤー";
+        currentRoom = document.getElementById('room-id-input').value.trim();
+        if (!currentRoom) return alert("ルームIDを入力してください");
+
+        const roomRef = ref(db, `rooms/${currentRoom}`);
+        const snapshot = await get(roomRef);
+
+        if (!snapshot.exists()) {
+            // 部屋が存在しない場合、ホストとして作成
+            isHost = true;
+            await set(roomRef, {
+                status: 'lobby',
+                hostId: myId,
+                players: { [myId]: { name: myName, answer: "" } }
+            });
+        } else {
+            // 既存の部屋に参加
+            await update(ref(db, `rooms/${currentRoom}/players/${myId}`), { name: myName, answer: "" });
+        }
+
+        document.getElementById('display-room-id').innerText = currentRoom;
+        if (isHost) {
+            document.getElementById('host-controls').classList.remove('hidden');
+            document.getElementById('waiting-msg').classList.add('hidden');
+            document.getElementById('next-round-btn').classList.remove('hidden');
+            document.getElementById('reveal-controls').classList.remove('hidden');
+        }
+
+        // 部屋の変更を監視
+        onValue(roomRef, (snap) => {
+            const data = snap.val();
+            if (!data) {
+                alert("ルームが解散されました");
+                location.reload();
+                return;
+            }
+            updateLobby(data.players);
+            handleGameState(data);
+        });
+
+        // 離脱時にプレイヤー情報を消す
+        window.addEventListener('beforeunload', () => {
+            remove(ref(db, `rooms/${currentRoom}/players/${myId}`));
+        });
+
+        showScreen('lobby-screen');
+    });
+
+    // ロビーのプレイヤーリスト更新
+    function updateLobby(players) {
+        const list = document.getElementById('players-list');
+        list.innerHTML = "";
+        for (const uid in players) {
+            const li = document.createElement('li');
+            li.innerText = players[uid].name + (players[uid].answer ? " (回答済み)" : "");
+            list.appendChild(li);
+        }
+    }
+
+    // ゲーム状態のハンドリング
+    function handleGameState(data) {
+        if (data.status === 'playing') {
+            document.getElementById('current-prompt').innerText = data.prompt;
+            
+            let instruction = "";
+            if (data.mode == "1") instruction = "このカードから連想される【自由な言葉】を入力してください。";
+            if (data.mode == "2") instruction = "この言葉から連想される【カード名】を入力してください。";
+            if (data.mode == "3") instruction = "このカードから連想される【別のカード名】を入力してください。";
+            document.getElementById('mode-instruction').innerText = instruction;
+
+            document.getElementById('answer-input').value = "";
+            document.getElementById('submit-status').innerText = "";
+            showScreen('game-screen');
+        } else if (data.status === 'revealed') {
+            document.getElementById('result-prompt').innerText = data.prompt;
+            const container = document.getElementById('results-container');
+            container.innerHTML = "";
+            
+            for (const uid in data.players) {
+                const player = data.players[uid];
+                const div = document.createElement('div');
+                div.className = 'result-card';
+                div.innerHTML = `<strong>${player.name}</strong>: <span style="font-size: 1.2em;">${player.answer || "無回答"}</span>`;
+                container.appendChild(div);
+            }
+            showScreen('result-screen');
+        } else if (data.status === 'lobby') {
+            // ロビーに戻った時の初期化
+            update(ref(db, `rooms/${currentRoom}/players/${myId}`), { answer: "" });
+            showScreen('lobby-screen');
+        }
+    }
+
+    // ゲーム開始 (ホストのみ)
+    document.getElementById('start-btn').addEventListener('click', () => {
+        const mode = document.getElementById('game-mode').value;
+        let promptText = "";
+
+        if (mode == "1" || mode == "3") {
+            promptText = getRandomElement(cardNames);
+        } else if (mode == "2") {
+            promptText = getRandomElement(randomWords);
+        }
+
+        // 全員の回答をリセットして開始
+        get(ref(db, `rooms/${currentRoom}/players`)).then(snap => {
+            const updates = {};
+            snap.forEach(child => { updates[`players/${child.key}/answer`] = ""; });
+            updates['status'] = 'playing';
+            updates['mode'] = mode;
+            updates['prompt'] = promptText;
+            update(ref(db, `rooms/${currentRoom}`), updates);
+        });
+    });
+
+    // 回答送信
+    document.getElementById('submit-btn').addEventListener('click', () => {
+        const answer = document.getElementById('answer-input').value.trim();
+        if (!answer) return alert("回答を入力してください");
+        
+        update(ref(db, `rooms/${currentRoom}/players/${myId}`), { answer: answer });
+        document.getElementById('submit-status').innerText = "送信完了！他のプレイヤーを待っています...";
+    });
+
+    // 結果発表 (ホストのみ)
+    document.getElementById('reveal-btn').addEventListener('click', () => {
+        update(ref(db, `rooms/${currentRoom}`), { status: 'revealed' });
+    });
+
+    // 次のラウンドへ (ホストのみ)
+    document.getElementById('next-round-btn').addEventListener('click', () => {
+        update(ref(db, `rooms/${currentRoom}`), { status: 'lobby' });
+    });
+
+    // 初期化実行
+    loadCardNames();
+</script>
+
+</body>
+</html>
